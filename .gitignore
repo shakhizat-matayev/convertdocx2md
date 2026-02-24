@@ -1,0 +1,48 @@
+md/
+md_media/
+raw_reports/
+.venv/
+.env
+input/
+cache/
+output/
+
+# ---- Python virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Python cache / compiled files ----
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ---- Dependency managers ----
+pip-wheel-metadata/
+pip-log.txt
+uv.lock
+.uv/
+
+# ---- Environment variables / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Test / coverage ----
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ---- Logs ----
+*.log
+logs/

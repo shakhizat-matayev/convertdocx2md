@@ -1,0 +1,140 @@
+-Goal-
+Given a subsurface well health report (SSAF), extract all valid entities and explicit relationships using strict extractive rules.
+
+########################################
+### HARD CONSTRAINTS (NON-NEGOTIABLE) ###
+########################################
+
+1. NO CONVERSATIONAL LANGUAGE.
+  Do not include phrases like:
+  - "Based on the data"
+  - "Here is a summary"
+  - "Note that"
+  - Explanations about formatting
+  - Meta commentary of any kind
+
+2. STRICTLY EXTRACTIVE.
+  Only use terminology explicitly written in the document.
+  If a fact is not written in the text, DO NOT infer it.
+
+3. NO ENRICHMENT.
+  Do not add geological, operational, or domain knowledge unless explicitly stated.
+
+4. CONCISE DESCRIPTIONS.
+  All entity_description and relationship_description fields must:
+  - Be factual
+  - Be under 20 words
+  - Contain no reasoning language
+
+5. TABLE ENFORCEMENT RULE.
+  In Section 3 (Anomaly Detection):
+  Every row marked with [x] MUST:
+  - Be extracted as an operational_anomaly entity
+  - Be linked to the well using relationship type EXHIBITS
+
+6. NO DUPLICATES.
+  Do not create duplicate entities.
+
+########################################
+-Allowed Entity Types-
+########################################
+
+- well
+- formation
+- member
+- lithology
+- production_metric
+- operational_anomaly
+- performance_status
+
+########################################
+-Allowed Relationship Types-
+########################################
+
+Use ONLY one of the following relationship types:
+
+- PENETRATES
+- TARGETS
+- PRODUCES_FROM
+- PRODUCES_AT
+- EXHIBITS
+- CLASSIFIED_AS
+- INTERCEPTS
+- COMPOSED_OF
+
+########################################
+-Entity Extraction Rules-
+########################################
+
+For each entity, extract:
+
+- entity_name: EXACT text as written, capitalized
+- entity_type: must match one allowed type
+- entity_description: factual attributes explicitly stated
+
+Additional constraints by type:
+
+WELL:
+- Identity only.
+- Do NOT embed metrics, performance, or anomaly details in description.
+
+OPERATIONAL_ANOMALY:
+- Include severity if stated.
+- Include count if stated.
+
+PRODUCTION_METRIC:
+- Include explicit numeric values if provided.
+
+########################################
+-Relationship Extraction Rules-
+########################################
+
+For each related pair:
+
+Extract:
+
+- source_entity
+- target_entity
+- relationship_type (must be from allowed list)
+- relationship_description (factual, under 20 words)
+- relationship_strength (integer 1–10)
+
+Relationship strength scale:
+
+10 = explicitly and directly stated  
+7–9 = clearly stated with contextual wording  
+4–6 = moderately implied in text  
+1–3 = weak but text-supported association  
+
+Do NOT explain reasoning.
+Do NOT justify strength.
+
+########################################
+-Output Format-
+########################################
+
+Format each entity exactly as:
+
+("entity"<|><entity_name><|><entity_type><|><entity_description>)
+
+Format each relationship exactly as:
+
+("relationship"<|><source_entity><|><target_entity><|><relationship_type><|><relationship_description><|><relationship_strength>)
+
+Use **##** as delimiter between each item.
+
+Return a single flat list of all entities and relationships.
+
+When finished, output:
+
+<|COMPLETE|>
+
+########################################
+-Real Data-
+########################################
+
+Entity_types: {entity_types}
+Text: {input_text}
+
+########################################
+Output:
