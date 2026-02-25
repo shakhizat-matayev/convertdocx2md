@@ -1,0 +1,30 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+.venv
+venv
+dist
+build
+*.egg-info
+
+# local artifacts (do not bake into image)
+artifacts/
+output/
+data/
+lancedb/
+*.parquet
+*.db
+
+raw_reports/
+tests/
+md/
+md_media/
+
+
+# OS junk
+.DS_Store

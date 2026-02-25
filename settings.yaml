@@ -59,8 +59,10 @@ input_storage:
   base_dir: "input"
 
 output_storage:
-  type: file # [file, blob, cosmosdb]
-  base_dir: "output"
+  type: blob
+  connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+  container_name: graphrag-artifacts
+  base_dir: "runs/poc"
 
 reporting:
   type: file # [file, blob]
@@ -69,12 +71,16 @@ reporting:
 cache:
   type: json # [json, memory, none]
   storage:
-    type: file # [file, blob, cosmosdb]
-    base_dir: "cache"
+    type: blob
+    connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+    container_name: graphrag-cache
+    base_dir: "cache/poc"
+
     
 vector_store:
-  type: lancedb
-  db_uri: output/lancedb
+  type: azure_ai_search
+  url: ${AZURE_SEARCH_ENDPOINT}
+  api_key: ${AZURE_SEARCH_ADMIN_KEY}
   index_schema:
     entity_description:
       index_name: entity_description

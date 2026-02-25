@@ -1,11 +1,12 @@
 import asyncio
+import io
 import json
 import logging
 import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -15,12 +16,16 @@ from pydantic import BaseModel, Field, field_validator
 import graphrag.api as api
 from graphrag.config.load_config import load_config
 
+from azure.storage.blob import BlobServiceClient
+
 
 # -------------------------
 # Configuration (env vars)
 # -------------------------
 GRAPHRAG_ROOT = Path(os.getenv("GRAPHRAG_ROOT", ".")).resolve()
-OUTPUT_DIR = Path(os.getenv("GRAPHRAG_OUTPUT_DIR", GRAPHRAG_ROOT / "output")).resolve()
+
+# Keep OUTPUT_DIR but do NOT require it. Useful for temp files, debugging, compatibility.
+OUTPUT_DIR = Path(os.getenv("GRAPHRAG_OUTPUT_DIR", "/data/output")).resolve()
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("GRAPHRAG_REQUEST_TIMEOUT_SECONDS", "120"))
 MAX_CONCURRENT_REQUESTS = int(os.getenv("GRAPHRAG_MAX_CONCURRENT_REQUESTS", "4"))
@@ -30,6 +35,13 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 DEFAULT_RESPONSE_TYPE = os.getenv("GRAPHRAG_RESPONSE_TYPE", "Multiple Paragraphs")
 DEFAULT_COMMUNITY_LEVEL = int(os.getenv("GRAPHRAG_COMMUNITY_LEVEL", "2"))
 
+# Blob artifacts configuration (recommended path)
+AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+ARTIFACTS_CONTAINER = os.getenv("GRAPHRAG_ARTIFACTS_CONTAINER", "graphrag-artifacts")
+ARTIFACTS_PREFIX = os.getenv("GRAPHRAG_ARTIFACTS_PREFIX", "runs/poc").strip("/")
+
+# Cache controls
+ARTIFACT_CACHE_TTL_SECONDS = int(os.getenv("GRAPHRAG_ARTIFACT_CACHE_TTL_SECONDS", "600"))
 
 # -------------------------
 # Structured JSON logging
@@ -64,12 +76,18 @@ _sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 graphrag_config = None
 
+# Artifacts (loaded lazily from Blob)
 entities_df: Optional[pd.DataFrame] = None
 communities_df: Optional[pd.DataFrame] = None
 community_reports_df: Optional[pd.DataFrame] = None
 text_units_df: Optional[pd.DataFrame] = None
 relationships_df: Optional[pd.DataFrame] = None
 covariates_df: Optional[pd.DataFrame] = None  # optional
+
+# Blob client + cache state
+_blob_service: Optional[BlobServiceClient] = None
+_artifact_lock = asyncio.Lock()
+_artifacts_loaded_at: float = 0.0
 
 
 # -------------------------
@@ -125,8 +143,14 @@ def _try_extract_citations(context: Any) -> List[Dict[str, Any]]:
     citations: List[Dict[str, Any]] = []
 
     if isinstance(context, dict):
-        # Most likely: text units or sources are in context somewhere
-        for key in ("citations", "sources", "source_text_units", "text_units", "used_text_units", "retrieved_text_units"):
+        for key in (
+            "citations",
+            "sources",
+            "source_text_units",
+            "text_units",
+            "used_text_units",
+            "retrieved_text_units",
+        ):
             if key in context:
                 val = context.get(key)
                 if isinstance(val, pd.DataFrame):
@@ -137,7 +161,6 @@ def _try_extract_citations(context: Any) -> List[Dict[str, Any]]:
                     citations = [{"key": key, "value": str(val)[:300]}]
                 break
 
-        # Fallback: any dataframe sample that looks like evidence
         if not citations:
             for k, v in context.items():
                 if isinstance(v, pd.DataFrame) and ("text" in v.columns or "id" in v.columns):
@@ -148,47 +171,106 @@ def _try_extract_citations(context: Any) -> List[Dict[str, Any]]:
 
 
 # -------------------------
-# Startup: load config + artifacts
+# Helpers: output dir + blob artifacts
+# -------------------------
+def _ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise RuntimeError(f"Output path exists but is not a directory: {path}")
+
+
+def _blob_key(filename: str) -> str:
+    # artifacts are stored as: runs/poc/<filename>
+    return f"{ARTIFACTS_PREFIX}/{filename}" if ARTIFACTS_PREFIX else filename
+
+
+def _get_blob_service() -> BlobServiceClient:
+    global _blob_service
+    if _blob_service is None:
+        if not AZURE_STORAGE_CONNECTION_STRING:
+            raise RuntimeError(
+                "AZURE_STORAGE_CONNECTION_STRING is not set. "
+                "This service is configured to load GraphRAG artifacts from Azure Blob."
+            )
+        _blob_service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+    return _blob_service
+
+
+def _read_parquet_from_blob(filename: str) -> pd.DataFrame:
+    """
+    Download a parquet blob into memory and load into a pandas DataFrame.
+    """
+    svc = _get_blob_service()
+    blob_client = svc.get_blob_client(container=ARTIFACTS_CONTAINER, blob=_blob_key(filename))
+    data = blob_client.download_blob().readall()
+    return pd.read_parquet(io.BytesIO(data))
+
+
+async def _ensure_artifacts_loaded(force: bool = False) -> None:
+    """
+    Lazily load required parquet artifacts from Blob with TTL caching.
+    This runs per worker; it avoids doing heavy downloads in startup.
+    """
+    global entities_df, communities_df, community_reports_df, text_units_df, relationships_df, covariates_df
+    global _artifacts_loaded_at
+
+    now = time.time()
+    cache_valid = (now - _artifacts_loaded_at) < ARTIFACT_CACHE_TTL_SECONDS
+    already_loaded = all(
+        x is not None
+        for x in (entities_df, communities_df, community_reports_df, text_units_df, relationships_df)
+    )
+
+    if not force and already_loaded and cache_valid:
+        return
+
+    async with _artifact_lock:
+        # Re-check after acquiring lock
+        now = time.time()
+        cache_valid = (now - _artifacts_loaded_at) < ARTIFACT_CACHE_TTL_SECONDS
+        already_loaded = all(
+            x is not None
+            for x in (entities_df, communities_df, community_reports_df, text_units_df, relationships_df)
+        )
+        if not force and already_loaded and cache_valid:
+            return
+
+        start = time.perf_counter()
+
+        # Required by methods
+        entities_df = await asyncio.to_thread(_read_parquet_from_blob, "entities.parquet")
+        communities_df = await asyncio.to_thread(_read_parquet_from_blob, "communities.parquet")
+        community_reports_df = await asyncio.to_thread(_read_parquet_from_blob, "community_reports.parquet")
+        text_units_df = await asyncio.to_thread(_read_parquet_from_blob, "text_units.parquet")
+        relationships_df = await asyncio.to_thread(_read_parquet_from_blob, "relationships.parquet")
+
+        # Optional
+        try:
+            covariates_df = await asyncio.to_thread(_read_parquet_from_blob, "covariates.parquet")
+        except Exception:
+            covariates_df = None
+
+        _artifacts_loaded_at = time.time()
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        logger.info(f"Loaded GraphRAG artifacts from blob://{ARTIFACTS_CONTAINER}/{ARTIFACTS_PREFIX} in {latency_ms}ms")
+
+
+# -------------------------
+# Startup: load config only (NO artifact reads here)
 # -------------------------
 @app.on_event("startup")
 def startup() -> None:
     global graphrag_config
-    global entities_df, communities_df, community_reports_df, text_units_df, relationships_df, covariates_df
 
     settings_path = GRAPHRAG_ROOT / "settings.yaml"
     if not settings_path.exists():
         raise RuntimeError(f"settings.yaml not found under GRAPHRAG_ROOT={GRAPHRAG_ROOT}")
 
-    if not OUTPUT_DIR.exists():
-        raise RuntimeError(f"Output directory not found: {OUTPUT_DIR}")
+    # Ensure output dir exists, but do NOT require /app/output or local parquets
+    _ensure_dir(OUTPUT_DIR)
 
     graphrag_config = load_config(GRAPHRAG_ROOT)
-
-    # Parquets required by methods:
-    # global_search: entities, communities, community_reports  [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
-    # local_search: + text_units, relationships, optional covariates [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
-    # drift_search: + text_units, relationships [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
-    required = {
-        "entities": OUTPUT_DIR / "entities.parquet",
-        "communities": OUTPUT_DIR / "communities.parquet",
-        "community_reports": OUTPUT_DIR / "community_reports.parquet",
-        "text_units": OUTPUT_DIR / "text_units.parquet",
-        "relationships": OUTPUT_DIR / "relationships.parquet",
-    }
-    missing = [str(p) for p in required.values() if not p.exists()]
-    if missing:
-        raise RuntimeError(f"Missing required parquet files: {missing}")
-
-    entities_df = pd.read_parquet(required["entities"])
-    communities_df = pd.read_parquet(required["communities"])
-    community_reports_df = pd.read_parquet(required["community_reports"])
-    text_units_df = pd.read_parquet(required["text_units"])
-    relationships_df = pd.read_parquet(required["relationships"])
-
-    cov_path = OUTPUT_DIR / "covariates.parquet"
-    covariates_df = pd.read_parquet(cov_path) if cov_path.exists() else None
-
-    logger.info(f"Loaded GraphRAG artifacts from {OUTPUT_DIR}")
+    logger.info(f"GraphRAG config loaded from {GRAPHRAG_ROOT}. OUTPUT_DIR={OUTPUT_DIR} (not required for artifacts).")
 
 
 # -------------------------
@@ -214,8 +296,17 @@ async def log_requests(request: Request, call_next):
         logger.handle(rec)
 
 
-@app.get("/health", operation_id="health_check")
+# -------------------------
+# Health endpoint (FAST, reliable)
+# -------------------------
+@app.get("/health", operation_id="health_check", tags=["health"])
 def health():
+    artifacts_loaded = all(
+        x is not None
+        for x in (entities_df, communities_df, community_reports_df, text_units_df, relationships_df)
+    )
+    cache_age_s = int(time.time() - _artifacts_loaded_at) if _artifacts_loaded_at else None
+
     return {
         "status": "ok",
         "graphrag_root": str(GRAPHRAG_ROOT),
@@ -223,6 +314,12 @@ def health():
         "timeout_seconds": REQUEST_TIMEOUT_SECONDS,
         "max_concurrent_requests": MAX_CONCURRENT_REQUESTS,
         "max_query_chars": MAX_QUERY_CHARS,
+        "blob_configured": bool(AZURE_STORAGE_CONNECTION_STRING),
+        "artifacts_container": ARTIFACTS_CONTAINER,
+        "artifacts_prefix": ARTIFACTS_PREFIX,
+        "artifact_cache_ttl_seconds": ARTIFACT_CACHE_TTL_SECONDS,
+        "artifacts_loaded": artifacts_loaded,
+        "artifact_cache_age_seconds": cache_age_s,
         "covariates_loaded": covariates_df is not None,
     }
 
@@ -230,10 +327,7 @@ def health():
 # -------------------------
 # Shared executor wrapper
 # -------------------------
-async def _run_with_limits(
-    method_name: str,
-    coro,
-) -> Dict[str, Any]:
+async def _run_with_limits(method_name: str, coro) -> Dict[str, Any]:
     request_id = str(uuid4())
     start = time.perf_counter()
 
@@ -276,7 +370,8 @@ async def query_global(req: QueryRequest):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
-    # global_search signature [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
+    await _ensure_artifacts_loaded()
+
     coro = api.global_search(
         config=graphrag_config,
         entities=entities_df,
@@ -296,7 +391,8 @@ async def query_local(req: QueryRequest):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
-    # local_search signature [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
+    await _ensure_artifacts_loaded()
+
     coro = api.local_search(
         config=graphrag_config,
         entities=entities_df,
@@ -318,7 +414,8 @@ async def query_drift(req: QueryRequest):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
-    # drift_search signature [1](https://deepwiki.com/microsoft/graphrag/7.5-lancedb-vector-store)
+    await _ensure_artifacts_loaded()
+
     coro = api.drift_search(
         config=graphrag_config,
         entities=entities_df,
