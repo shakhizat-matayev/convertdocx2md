@@ -62,7 +62,8 @@ jobs:
             fi
           fi
 
-      - name: Create Container App (if missing) using public placeholder image
+
+      - name: Create Container App (if missing) using public placeholder image (NO ingress)
         run: |
           set +e
           az containerapp show -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} > /dev/null 2>&1
@@ -70,19 +71,18 @@ jobs:
           set -e
 
           if [ $EXISTS -ne 0 ]; then
-            echo "Creating Container App with placeholder image (public)..."
+            echo "Creating Container App with placeholder image (public) WITHOUT ingress..."
             az containerapp create \
               -g ${{ vars.RESOURCE_GROUP }} \
               -n ${{ vars.CONTAINERAPP_NAME }} \
               --environment ${{ vars.CONTAINERAPP_ENV }} \
               --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
-              --ingress external \
-              --target-port ${{ env.PLACEHOLDER_PORT }} \
               --min-replicas 1 --max-replicas 3 \
               --cpu 1.0 --memory 2.0Gi
           else
             echo "Container App exists."
           fi
+
 
       - name: Configure ACR registry credentials for Container App (image pull)
         run: |
@@ -107,15 +107,14 @@ jobs:
         # secrets are app-scoped and referenced later as secretref
         # [4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)[6](https://learn.microsoft.com/en-us/cli/azure/search?view=azure-cli-latest)
 
-      - name: Deploy new revision (real image + correct target port + env vars)
+      - name: Deploy new revision (real image + env vars)
         run: |
           az containerapp update \
             -g ${{ vars.RESOURCE_GROUP }} \
             -n ${{ vars.CONTAINERAPP_NAME }} \
             --image $IMAGE \
-            --target-port ${{ env.APP_PORT }} \
             --set-env-vars \
-              PORT=${{ env.APP_PORT }} \
+              PORT=8000 \
               GRAPHRAG_ROOT='${{ vars.GRAPHRAG_ROOT }}' \
               GRAPHRAG_ARTIFACTS_CONTAINER='${{ vars.GRAPHRAG_ARTIFACTS_CONTAINER }}' \
               GRAPHRAG_ARTIFACTS_PREFIX='${{ vars.GRAPHRAG_ARTIFACTS_PREFIX }}' \
@@ -127,8 +126,17 @@ jobs:
               GRAPHRAG_API_KEY=secretref:graphrag-api-key \
               AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn \
               AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key
-        # updating env vars creates a new revision and supports secret references
-        # [3](https://deepwiki.com/microsoft/graphrag/7-storage-system)[5](https://github.com/microsoft/graphrag/blob/main/graphrag/cache/factory.py)[4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)
+
+      
+      - name: Enable/Update ingress (external) to target port 8000
+        run: |
+          az containerapp ingress enable \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --type external \
+            --target-port 8000 \
+            --transport auto
+
 
       - name: Show FQDN
         run: |
