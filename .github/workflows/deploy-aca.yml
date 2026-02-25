@@ -10,7 +10,8 @@ permissions:
 
 env:
   IMAGE_NAME: graphrag-api
-  PORT: "8000"
+  APP_PORT: "8000"
+  PLACEHOLDER_PORT: "80"
 
 jobs:
   build-deploy:
@@ -33,7 +34,7 @@ jobs:
           ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
           echo "login_server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
 
-      - name: Login to ACR
+      - name: Login to ACR (push)
         run: |
           az acr login -n ${{ vars.ACR_NAME }}
 
@@ -45,6 +46,21 @@ jobs:
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
+      - name: Ensure Container App exists and is not in Failed state
+        run: |
+          set +e
+          az containerapp show -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} > /dev/null 2>&1
+          EXISTS=$?
+          set -e
+
+          if [ $EXISTS -eq 0 ]; then
+            STATE=$(az containerapp show -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} --query properties.provisioningState -o tsv)
+            echo "Current provisioningState=$STATE"
+            if [ "$STATE" = "Failed" ]; then
+              echo "Container App is in Failed state. Deleting to recreate cleanly..."
+              az containerapp delete -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} --yes
+            fi
+          fi
 
       - name: Create Container App (if missing) using public placeholder image
         run: |
@@ -61,13 +77,12 @@ jobs:
               --environment ${{ vars.CONTAINERAPP_ENV }} \
               --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
               --ingress external \
-              --target-port ${{ env.PORT }} \
+              --target-port ${{ env.PLACEHOLDER_PORT }} \
               --min-replicas 1 --max-replicas 3 \
               --cpu 1.0 --memory 2.0Gi
           else
             echo "Container App exists."
           fi
-
 
       - name: Configure ACR registry credentials for Container App (image pull)
         run: |
@@ -77,7 +92,8 @@ jobs:
             --server ${{ steps.acr.outputs.login_server }} \
             --username ${{ secrets.ACR_USERNAME }} \
             --password ${{ secrets.ACR_PASSWORD }}
-
+        # registry commands are supported for configuring container registry access
+        # [2](https://github.com/microsoft/graphrag/discussions/2041)
 
       - name: Set/Update ACA secrets (app-level)
         run: |
@@ -88,15 +104,18 @@ jobs:
               graphrag-api-key='${{ secrets.GRAPHRAG_API_KEY }}' \
               storage-conn='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
               search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}'
+        # secrets are app-scoped and referenced later as secretref
+        # [4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)[6](https://learn.microsoft.com/en-us/cli/azure/search?view=azure-cli-latest)
 
-      - name: Deploy new revision (image + env vars)
+      - name: Deploy new revision (real image + correct target port + env vars)
         run: |
           az containerapp update \
             -g ${{ vars.RESOURCE_GROUP }} \
             -n ${{ vars.CONTAINERAPP_NAME }} \
             --image $IMAGE \
+            --target-port ${{ env.APP_PORT }} \
             --set-env-vars \
-              PORT=${{ env.PORT }} \
+              PORT=${{ env.APP_PORT }} \
               GRAPHRAG_ROOT='${{ vars.GRAPHRAG_ROOT }}' \
               GRAPHRAG_ARTIFACTS_CONTAINER='${{ vars.GRAPHRAG_ARTIFACTS_CONTAINER }}' \
               GRAPHRAG_ARTIFACTS_PREFIX='${{ vars.GRAPHRAG_ARTIFACTS_PREFIX }}' \
@@ -108,6 +127,8 @@ jobs:
               GRAPHRAG_API_KEY=secretref:graphrag-api-key \
               AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn \
               AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key
+        # updating env vars creates a new revision and supports secret references
+        # [3](https://deepwiki.com/microsoft/graphrag/7-storage-system)[5](https://github.com/microsoft/graphrag/blob/main/graphrag/cache/factory.py)[4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)
 
       - name: Show FQDN
         run: |
@@ -115,3 +136,5 @@ jobs:
             -g ${{ vars.RESOURCE_GROUP }} \
             -n ${{ vars.CONTAINERAPP_NAME }} \
             --query properties.configuration.ingress.fqdn -o tsv
+        # GH Actions deploying revisions is a supported ACA pattern
+        # [3](https://deepwiki.com/microsoft/graphrag/7-storage-system)
