@@ -1,0 +1,105 @@
+name: Build and Deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE_NAME: graphrag-api
+  PORT: "8000"
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get ACR login server
+        id: acr
+        run: |
+          ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
+          echo "login_server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Login to ACR
+        run: |
+          az acr login -n ${{ vars.ACR_NAME }}
+
+      - name: Build and Push Image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          IMAGE="${{ steps.acr.outputs.login_server }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Create Container App (if missing)
+        run: |
+          set +e
+          az containerapp show -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} > /dev/null 2>&1
+          EXISTS=$?
+          set -e
+
+          if [ $EXISTS -ne 0 ]; then
+            echo "Creating Container App..."
+            az containerapp create \
+              -g ${{ vars.RESOURCE_GROUP }} \
+              -n ${{ vars.CONTAINERAPP_NAME }} \
+              --environment ${{ vars.CONTAINERAPP_ENV }} \
+              --image $IMAGE \
+              --ingress external \
+              --target-port ${{ env.PORT }} \
+              --min-replicas 1 --max-replicas 3 \
+              --cpu 1.0 --memory 2.0Gi
+          else
+            echo "Container App exists."
+          fi
+
+      - name: Set/Update ACA secrets (app-level)
+        run: |
+          az containerapp secret set \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --secrets \
+              graphrag-api-key='${{ secrets.GRAPHRAG_API_KEY }}' \
+              storage-conn='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
+              search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}'
+
+      - name: Deploy new revision (image + env vars)
+        run: |
+          az containerapp update \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --image $IMAGE \
+            --set-env-vars \
+              PORT=${{ env.PORT }} \
+              GRAPHRAG_ROOT='${{ vars.GRAPHRAG_ROOT }}' \
+              GRAPHRAG_ARTIFACTS_CONTAINER='${{ vars.GRAPHRAG_ARTIFACTS_CONTAINER }}' \
+              GRAPHRAG_ARTIFACTS_PREFIX='${{ vars.GRAPHRAG_ARTIFACTS_PREFIX }}' \
+              AZURE_OPENAI_ENDPOINT='${{ vars.AZURE_OPENAI_ENDPOINT }}' \
+              AZURE_OPENAI_API_VERSION='${{ vars.AZURE_OPENAI_API_VERSION }}' \
+              AZURE_OPENAI_CHAT_DEPLOYMENT='${{ vars.AZURE_OPENAI_CHAT_DEPLOYMENT }}' \
+              AZURE_OPENAI_EMBED_DEPLOYMENT='${{ vars.AZURE_OPENAI_EMBED_DEPLOYMENT }}' \
+              AZURE_SEARCH_ENDPOINT='${{ vars.AZURE_SEARCH_ENDPOINT }}' \
+              GRAPHRAG_API_KEY=secretref:graphrag-api-key \
+              AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn \
+              AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key
+
+      - name: Show FQDN
+        run: |
+          az containerapp show \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --query properties.configuration.ingress.fqdn -o tsv
