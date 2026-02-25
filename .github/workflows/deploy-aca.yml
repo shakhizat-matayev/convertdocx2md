@@ -45,7 +45,8 @@ jobs:
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      - name: Create Container App (if missing)
+
+      - name: Create Container App (if missing) using public placeholder image
         run: |
           set +e
           az containerapp show -g ${{ vars.RESOURCE_GROUP }} -n ${{ vars.CONTAINERAPP_NAME }} > /dev/null 2>&1
@@ -53,12 +54,12 @@ jobs:
           set -e
 
           if [ $EXISTS -ne 0 ]; then
-            echo "Creating Container App..."
+            echo "Creating Container App with placeholder image (public)..."
             az containerapp create \
               -g ${{ vars.RESOURCE_GROUP }} \
               -n ${{ vars.CONTAINERAPP_NAME }} \
               --environment ${{ vars.CONTAINERAPP_ENV }} \
-              --image $IMAGE \
+              --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
               --ingress external \
               --target-port ${{ env.PORT }} \
               --min-replicas 1 --max-replicas 3 \
@@ -66,6 +67,17 @@ jobs:
           else
             echo "Container App exists."
           fi
+
+
+      - name: Configure ACR registry credentials for Container App (image pull)
+        run: |
+          az containerapp registry set \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --server ${{ steps.acr.outputs.login_server }} \
+            --username ${{ secrets.ACR_USERNAME }} \
+            --password ${{ secrets.ACR_PASSWORD }}
+
 
       - name: Set/Update ACA secrets (app-level)
         run: |
