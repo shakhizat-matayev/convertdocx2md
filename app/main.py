@@ -10,13 +10,24 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from pydantic import BaseModel, Field, field_validator
 
 import graphrag.api as api
 from graphrag.config.load_config import load_config
 
 from azure.storage.blob import BlobServiceClient
+
+
+API_KEY = os.getenv("SERVICE_API_KEY", "")
+
+def require_api_key(x_api_key: str | None = Header(default=None)):
+    if not API_KEY:
+        # fail closed in prod; for POC you can allow missing locally if you want,
+        # but recommended is to require it when deployed
+        raise HTTPException(status_code=500, detail="SERVICE_API_KEY not configured")
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # -------------------------
@@ -71,7 +82,10 @@ logger.propagate = False
 # -------------------------
 # FastAPI app + globals
 # -------------------------
-app = FastAPI(title="GraphRAG API (Global + Local + DRIFT)")
+app = FastAPI(
+    title="GraphRAG API (Global + Local + DRIFT)",
+    openapi_version="3.0.3"
+    )
 _sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 graphrag_config = None
@@ -366,7 +380,7 @@ async def _run_with_limits(method_name: str, coro) -> Dict[str, Any]:
 # Global / Local / DRIFT endpoints
 # -------------------------
 @app.post("/query/global", operation_id="graphrag_global_search")
-async def query_global(req: QueryRequest):
+async def query_global(req: QueryRequest, _: None = Depends(require_api_key)):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
@@ -387,7 +401,7 @@ async def query_global(req: QueryRequest):
 
 
 @app.post("/query/local", operation_id="graphrag_local_search")
-async def query_local(req: QueryRequest):
+async def query_local(req: QueryRequest, _: None = Depends(require_api_key)):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
@@ -410,7 +424,7 @@ async def query_local(req: QueryRequest):
 
 
 @app.post("/query/drift", operation_id="graphrag_drift_search")
-async def query_drift(req: QueryRequest):
+async def query_drift(req: QueryRequest, _: None = Depends(require_api_key)):
     if graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 

@@ -103,7 +103,8 @@ jobs:
             --secrets \
               graphrag-api-key='${{ secrets.GRAPHRAG_API_KEY }}' \
               storage-conn='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
-              search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}'
+              search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}' \
+              service-api-key='${{ secrets.SERVICE_API_KEY }}'
         # secrets are app-scoped and referenced later as secretref
         # [4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)[6](https://learn.microsoft.com/en-us/cli/azure/search?view=azure-cli-latest)
 
@@ -125,7 +126,8 @@ jobs:
               AZURE_SEARCH_ENDPOINT='${{ vars.AZURE_SEARCH_ENDPOINT }}' \
               GRAPHRAG_API_KEY=secretref:graphrag-api-key \
               AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn \
-              AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key
+              AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key \
+              SERVICE_API_KEY=secretref:service-api-key
 
       
       - name: Enable/Update ingress (external) to target port 8000
