@@ -84,6 +84,7 @@ logger.propagate = False
 # -------------------------
 app = FastAPI(
     title="GraphRAG API (Global + Local + DRIFT)",
+    version="0.1.0",
     openapi_version="3.0.3"
     )
 _sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
