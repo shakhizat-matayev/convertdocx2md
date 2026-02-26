@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from hmac import compare_digest
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -17,6 +17,7 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -175,6 +176,69 @@ app = FastAPI(
     version="1.0.0",
     openapi_version="3.0.3",
 )
+
+_OPENAPI_SCHEMA_CACHE: dict[str, Any] | None = None
+
+
+def _convert_openapi31_to_30(schema: dict[str, Any]) -> dict[str, Any]:
+    schema = json.loads(json.dumps(schema))
+    schema["openapi"] = "3.0.3"
+    schema.pop("jsonSchemaDialect", None)
+    schema.pop("webhooks", None)
+
+    def _fix_nullable(node: Any) -> None:
+        if isinstance(node, dict):
+            any_of = node.get("anyOf")
+            if isinstance(any_of, list):
+                has_null = any(isinstance(item, dict) and item.get("type") == "null" for item in any_of)
+                if has_null:
+                    without_null = [
+                        item
+                        for item in any_of
+                        if not (isinstance(item, dict) and item.get("type") == "null")
+                    ]
+                    if len(without_null) == 1 and isinstance(without_null[0], dict):
+                        merged = without_null[0]
+                        node.pop("anyOf", None)
+                        for key, value in merged.items():
+                            node[key] = value
+                    else:
+                        node["anyOf"] = without_null
+                    node["nullable"] = True
+
+            if node.get("type") == "null":
+                node.pop("type", None)
+                node["nullable"] = True
+
+            for value in node.values():
+                _fix_nullable(value)
+        elif isinstance(node, list):
+            for item in node:
+                _fix_nullable(item)
+
+    _fix_nullable(schema)
+    return schema
+
+
+def _custom_openapi() -> dict[str, Any]:
+    global _OPENAPI_SCHEMA_CACHE
+    if _OPENAPI_SCHEMA_CACHE is not None:
+        return _OPENAPI_SCHEMA_CACHE
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    schema = _convert_openapi31_to_30(schema)
+    if PUBLIC_BASE_URL:
+        schema["servers"] = [{"url": PUBLIC_BASE_URL.rstrip("/")}]
+
+    _OPENAPI_SCHEMA_CACHE = schema
+    return _OPENAPI_SCHEMA_CACHE
+
+
+app.openapi = _custom_openapi
 
 
 def _ensure_output_dir(path: Path) -> None:
@@ -553,7 +617,4 @@ async def query_drift(req: QueryRequest, request: Request, _: None = Depends(req
 
 @app.get("/openapi-3.0.json", include_in_schema=False)
 def openapi_3_0() -> JSONResponse:
-    schema = app.openapi()
-    if PUBLIC_BASE_URL:
-        schema["servers"] = [{"url": PUBLIC_BASE_URL.rstrip("/")}]
-    return JSONResponse(content=schema)
+    return JSONResponse(content=app.openapi())
