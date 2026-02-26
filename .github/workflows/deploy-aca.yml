@@ -28,6 +28,65 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Validate required workflow variables and secrets
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+          CONTAINERAPP_NAME: ${{ vars.CONTAINERAPP_NAME }}
+          CONTAINERAPP_ENV: ${{ vars.CONTAINERAPP_ENV }}
+          GRAPHRAG_ROOT: ${{ vars.GRAPHRAG_ROOT }}
+          GRAPHRAG_ARTIFACTS_CONTAINER: ${{ vars.GRAPHRAG_ARTIFACTS_CONTAINER }}
+          GRAPHRAG_ARTIFACTS_PREFIX: ${{ vars.GRAPHRAG_ARTIFACTS_PREFIX }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_VERSION: ${{ vars.AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_CHAT_DEPLOYMENT: ${{ vars.AZURE_OPENAI_CHAT_DEPLOYMENT }}
+          AZURE_OPENAI_EMBED_DEPLOYMENT: ${{ vars.AZURE_OPENAI_EMBED_DEPLOYMENT }}
+          AZURE_SEARCH_ENDPOINT: ${{ vars.AZURE_SEARCH_ENDPOINT }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          GRAPHRAG_API_KEY: ${{ secrets.GRAPHRAG_API_KEY }}
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+          AZURE_SEARCH_ADMIN_KEY: ${{ secrets.AZURE_SEARCH_ADMIN_KEY }}
+          SERVICE_API_KEY: ${{ secrets.SERVICE_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          required=(
+            ACR_NAME
+            RESOURCE_GROUP
+            CONTAINERAPP_NAME
+            CONTAINERAPP_ENV
+            GRAPHRAG_ROOT
+            GRAPHRAG_ARTIFACTS_CONTAINER
+            GRAPHRAG_ARTIFACTS_PREFIX
+            AZURE_OPENAI_ENDPOINT
+            AZURE_OPENAI_API_VERSION
+            AZURE_OPENAI_CHAT_DEPLOYMENT
+            AZURE_OPENAI_EMBED_DEPLOYMENT
+            AZURE_SEARCH_ENDPOINT
+            ACR_USERNAME
+            ACR_PASSWORD
+            GRAPHRAG_API_KEY
+            AZURE_STORAGE_CONNECTION_STRING
+            AZURE_SEARCH_ADMIN_KEY
+            SERVICE_API_KEY
+          )
+
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required GitHub vars/secrets:\n'
+            printf ' - %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+          echo "All required workflow vars/secrets are present."
+
       - name: Get ACR login server
         id: acr
         run: |

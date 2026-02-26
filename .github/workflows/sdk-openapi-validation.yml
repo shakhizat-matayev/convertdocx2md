@@ -1,0 +1,120 @@
+name: OpenAPI SDK Validation
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-and-validate-sdk:
+    runs-on: ubuntu-latest
+    env:
+      SDK_DIR: sdk_client
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install openapi-python-client
+
+      - name: Build OpenAPI schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from app.main import app
+
+          out = Path("openapi-3.0.json")
+          out.write_text(json.dumps(app.openapi(), indent=2), encoding="utf-8")
+          print(f"Wrote {out}")
+          PY
+
+      - name: Validate OpenAPI constraints
+        run: |
+          python - <<'PY'
+          import json
+
+          with open("openapi-3.0.json", "r", encoding="utf-8") as f:
+            spec = json.load(f)
+
+          version = str(spec.get("openapi", ""))
+          if not version.startswith("3.0"):
+            raise SystemExit(f"OpenAPI version must be 3.0.x, got {version}")
+
+          def walk(node):
+            if isinstance(node, dict):
+              yield node
+              for v in node.values():
+                yield from walk(v)
+            elif isinstance(node, list):
+              for item in node:
+                yield from walk(item)
+
+          security_schemes = spec.get("components", {}).get("securitySchemes", {})
+          for name, scheme in security_schemes.items():
+            if isinstance(scheme, dict) and scheme.get("in") == "cookie":
+              raise SystemExit(f"Cookie auth is forbidden: {name}")
+
+          for obj in walk(spec):
+            if "anyOf" in obj or "oneOf" in obj:
+              raise SystemExit("Complex unions (anyOf/oneOf) are not allowed")
+
+          print("OpenAPI constraints validated")
+          PY
+
+      - name: Ensure committed SDK directory exists
+        run: |
+          if [ ! -d "$SDK_DIR" ]; then
+            echo "Expected committed SDK directory '$SDK_DIR' was not found."
+            echo "Create it once with: OPENAPI_URL=<url> ./scripts/generate_sdk.sh"
+            exit 1
+          fi
+
+      - name: Regenerate committed SDK
+        run: |
+          rm -rf "$SDK_DIR"
+          openapi-python-client generate \
+            --path openapi-3.0.json \
+            --meta none \
+            --package-name graphrag_sdk_client \
+            --project-name graphrag-sdk-client \
+            --output-path "$SDK_DIR" \
+            --overwrite
+
+      - name: Smoke test generated SDK
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("sdk_client").resolve()))
+
+          from graphrag_sdk_client import Client
+          from graphrag_sdk_client.api.query import query_global
+
+          _ = Client(base_url="https://example.local")
+          _ = query_global
+          print("Generated SDK imports OK")
+          PY
+
+      - name: Fail if SDK is out of sync
+        run: |
+          git add -N "$SDK_DIR"
+          if ! git diff --exit-code -- "$SDK_DIR"; then
+            echo "SDK drift detected in '$SDK_DIR'. Regenerate and commit changes."
+            git status --short -- "$SDK_DIR"
+            exit 1
+          fi
