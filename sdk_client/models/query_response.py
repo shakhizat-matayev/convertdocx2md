@@ -1,42 +1,29 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
-
-from ..types import UNSET, Unset
 
 from ..models.query_method import QueryMethod
-
-
-
-
-
 
 T = TypeVar("T", bound="QueryResponse")
 
 
-
 @_attrs_define
 class QueryResponse:
-    """ 
-        Attributes:
-            request_id (str):
-            method (QueryMethod):
-            answer (str):
-            latency_ms (int):
-     """
+    """
+    Attributes:
+        request_id (str):
+        method (QueryMethod):
+        answer (str):
+        latency_ms (int):
+    """
 
     request_id: str
     method: QueryMethod
     answer: str
     latency_ms: int
-
-
-
-
 
     def to_dict(self) -> dict[str, Any]:
         request_id = self.request_id
@@ -47,19 +34,18 @@ class QueryResponse:
 
         latency_ms = self.latency_ms
 
-
         field_dict: dict[str, Any] = {}
 
-        field_dict.update({
-            "request_id": request_id,
-            "method": method,
-            "answer": answer,
-            "latency_ms": latency_ms,
-        })
+        field_dict.update(
+            {
+                "request_id": request_id,
+                "method": method,
+                "answer": answer,
+                "latency_ms": latency_ms,
+            }
+        )
 
         return field_dict
-
-
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
@@ -67,9 +53,6 @@ class QueryResponse:
         request_id = d.pop("request_id")
 
         method = QueryMethod(d.pop("method"))
-
-
-
 
         answer = d.pop("answer")
 
@@ -83,4 +66,3 @@ class QueryResponse:
         )
 
         return query_response
-

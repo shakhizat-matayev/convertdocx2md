@@ -1,41 +1,31 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+from typing import Any, TypeVar, cast
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
-
-from ..types import UNSET, Unset
-from typing import cast
-
-
-
-
-
 
 T = TypeVar("T", bound="HealthResponse")
 
 
-
 @_attrs_define
 class HealthResponse:
-    """ 
-        Attributes:
-            status (str):
-            graphrag_root (str):
-            output_dir (str):
-            timeout_seconds (float):
-            max_concurrent_requests (int):
-            max_query_chars (int):
-            artifacts_container (str):
-            artifacts_prefix (str):
-            artifact_cache_ttl_seconds (int):
-            artifacts_loaded (bool):
-            artifact_cache_age_seconds (int | None | Unset):
-     """
+    """
+    Attributes:
+        status (str):
+        graphrag_root (str):
+        output_dir (str):
+        timeout_seconds (float):
+        max_concurrent_requests (int):
+        max_query_chars (int):
+        artifacts_container (str):
+        artifacts_prefix (str):
+        artifact_cache_ttl_seconds (int):
+        artifacts_loaded (bool):
+        artifact_cache_age_seconds (int | None | Unset):
+    """
 
     status: str
     graphrag_root: str
@@ -48,10 +38,6 @@ class HealthResponse:
     artifact_cache_ttl_seconds: int
     artifacts_loaded: bool
     artifact_cache_age_seconds: int | None | Unset = UNSET
-
-
-
-
 
     def to_dict(self) -> dict[str, Any]:
         status = self.status
@@ -80,27 +66,26 @@ class HealthResponse:
         else:
             artifact_cache_age_seconds = self.artifact_cache_age_seconds
 
-
         field_dict: dict[str, Any] = {}
 
-        field_dict.update({
-            "status": status,
-            "graphrag_root": graphrag_root,
-            "output_dir": output_dir,
-            "timeout_seconds": timeout_seconds,
-            "max_concurrent_requests": max_concurrent_requests,
-            "max_query_chars": max_query_chars,
-            "artifacts_container": artifacts_container,
-            "artifacts_prefix": artifacts_prefix,
-            "artifact_cache_ttl_seconds": artifact_cache_ttl_seconds,
-            "artifacts_loaded": artifacts_loaded,
-        })
+        field_dict.update(
+            {
+                "status": status,
+                "graphrag_root": graphrag_root,
+                "output_dir": output_dir,
+                "timeout_seconds": timeout_seconds,
+                "max_concurrent_requests": max_concurrent_requests,
+                "max_query_chars": max_query_chars,
+                "artifacts_container": artifacts_container,
+                "artifacts_prefix": artifacts_prefix,
+                "artifact_cache_ttl_seconds": artifact_cache_ttl_seconds,
+                "artifacts_loaded": artifacts_loaded,
+            }
+        )
         if artifact_cache_age_seconds is not UNSET:
             field_dict["artifact_cache_age_seconds"] = artifact_cache_age_seconds
 
         return field_dict
-
-
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
@@ -132,8 +117,9 @@ class HealthResponse:
                 return data
             return cast(int | None | Unset, data)
 
-        artifact_cache_age_seconds = _parse_artifact_cache_age_seconds(d.pop("artifact_cache_age_seconds", UNSET))
-
+        artifact_cache_age_seconds = _parse_artifact_cache_age_seconds(
+            d.pop("artifact_cache_age_seconds", UNSET)
+        )
 
         health_response = cls(
             status=status,
@@ -150,4 +136,3 @@ class HealthResponse:
         )
 
         return health_response
-

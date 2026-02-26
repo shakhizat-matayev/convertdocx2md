@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class QueryMethod(str, Enum):
     DRIFT = "drift"
     GLOBAL = "global"
