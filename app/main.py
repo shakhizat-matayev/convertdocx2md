@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request, Header, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Security
 from pydantic import BaseModel, Field, field_validator
 
 import graphrag.api as api
@@ -18,15 +18,17 @@ from graphrag.config.load_config import load_config
 
 from azure.storage.blob import BlobServiceClient
 
+from fastapi.security.api_key import APIKeyHeader
+
+api_key_scheme = APIKeyHeader(name="x-api-key", auto_error=False)
 
 API_KEY = os.getenv("SERVICE_API_KEY", "")
 
-def require_api_key(x_api_key: str | None = Header(default=None)):
-    if not API_KEY:
-        # fail closed in prod; for POC you can allow missing locally if you want,
-        # but recommended is to require it when deployed
+def require_api_key(api_key: str | None = Security(api_key_scheme)):
+    expected = os.getenv("SERVICE_API_KEY", "")
+    if not expected:
         raise HTTPException(status_code=500, detail="SERVICE_API_KEY not configured")
-    if x_api_key != API_KEY:
+    if api_key != expected:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
