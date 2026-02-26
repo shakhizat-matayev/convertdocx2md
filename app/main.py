@@ -18,18 +18,19 @@ from graphrag.config.load_config import load_config
 
 from azure.storage.blob import BlobServiceClient
 
+from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
 from fastapi.security.api_key import APIKeyHeader
 
-api_key_scheme = APIKeyHeader(name="x-api-key", auto_error=False)
 
-API_KEY = os.getenv("SERVICE_API_KEY", "")
+api_key_scheme = APIKeyHeader(name="x-api-key", auto_error=False)
 
 def require_api_key(api_key: str | None = Security(api_key_scheme)):
     expected = os.getenv("SERVICE_API_KEY", "")
     if not expected:
         raise HTTPException(status_code=500, detail="SERVICE_API_KEY not configured")
     if api_key != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid API key")
 
 
 # -------------------------
@@ -446,3 +447,94 @@ async def query_drift(req: QueryRequest, _: None = Depends(require_api_key)):
         verbose=req.verbose,
     )
     return await _run_with_limits("drift", coro)
+
+#============= Helper Transformer ============
+def _convert_openapi31_to_30(schema: dict) -> dict:
+    """
+    Minimal conversion for Foundry/OpenAPI 3.0 consumers:
+    - Convert JSON Schema nullables (3.1) to OpenAPI 3.0 'nullable'
+    - Add apiKey security scheme
+    - Remove header-parameter based api-key definitions
+    """
+    schema = json.loads(json.dumps(schema))  # deep copy
+
+    # Force OpenAPI version string
+    schema["openapi"] = "3.0.3"
+
+    # Remove 3.1-only top-level keys if present
+    schema.pop("jsonSchemaDialect", None)
+
+    def fix_node(node):
+        if isinstance(node, dict):
+            # Convert anyOf with null -> nullable
+            if "anyOf" in node and isinstance(node["anyOf"], list):
+                any_of = node["anyOf"]
+                has_null = any(isinstance(x, dict) and x.get("type") == "null" for x in any_of)
+                if has_null:
+                    any_of = [x for x in any_of if not (isinstance(x, dict) and x.get("type") == "null")]
+                    node["anyOf"] = any_of
+                    node["nullable"] = True
+                    # If anyOf collapses to a single schema, simplify it
+                    if len(any_of) == 1 and isinstance(any_of[0], dict):
+                        single = any_of[0]
+                        node.pop("anyOf", None)
+                        for k, v in single.items():
+                            node[k] = v
+                        node["nullable"] = True
+
+            # Remove direct type:null
+            if node.get("type") == "null":
+                node.pop("type", None)
+                node["nullable"] = True
+
+            # Recurse
+            for k, v in list(node.items()):
+                fix_node(v)
+
+        elif isinstance(node, list):
+            for item in node:
+                fix_node(item)
+
+    fix_node(schema)
+
+    # --- Add API key security scheme (Foundry expects this for API key connections) ---
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["apiKeyHeader"] = {
+        "type": "apiKey",
+        "name": "x-api-key",
+        "in": "header"
+    }
+
+    # Require it globally
+    schema["security"] = [{"apiKeyHeader": []}]
+
+    # Make /health public (optional)
+    if "/health" in schema.get("paths", {}):
+        if "get" in schema["paths"]["/health"]:
+            schema["paths"]["/health"]["get"]["security"] = []
+
+    # Remove x-api-key as a normal parameter (Foundry prefers securitySchemes)
+    for path, methods in schema.get("paths", {}).items():
+        for method, op in methods.items():
+            if isinstance(op, dict) and "parameters" in op:
+                op["parameters"] = [
+                    p for p in op["parameters"]
+                    if not (isinstance(p, dict) and p.get("in") == "header" and p.get("name") == "x-api-key")
+                ]
+                if not op["parameters"]:
+                    op.pop("parameters", None)
+
+    return schema
+
+# ============ New Route ===============
+@app.get("/openapi-3.0.json", include_in_schema=False)
+def openapi_3_0():
+    # Generate the normal schema (FastAPI will produce 3.1)
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    # Convert to 3.0 + security scheme for Foundry
+    converted = _convert_openapi31_to_30(schema)
+    return JSONResponse(converted)
