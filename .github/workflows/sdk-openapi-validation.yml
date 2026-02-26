@@ -28,7 +28,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install openapi-python-client
+          pip install openapi-python-client==0.28.2
+
+      - name: Print generator version
+        run: |
+          openapi-python-client --version
 
       - name: Build OpenAPI schema
         run: |
