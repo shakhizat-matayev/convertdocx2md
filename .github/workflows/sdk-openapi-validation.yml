@@ -96,13 +96,8 @@ jobs:
       - name: Smoke test generated SDK
         run: |
           python - <<'PY'
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, str(Path("sdk_client").resolve()))
-
-          from graphrag_sdk_client import Client
-          from graphrag_sdk_client.api.query import query_global
+          from sdk_client import Client
+          from sdk_client.api.query import query_global
 
           _ = Client(base_url="https://example.local")
           _ = query_global
