@@ -88,9 +88,8 @@ jobs:
           rm -rf "$SDK_DIR"
           openapi-python-client generate \
             --path openapi-3.0.json \
+            --config openapi-python-client-config.yaml \
             --meta none \
-            --package-name graphrag_sdk_client \
-            --project-name graphrag-sdk-client \
             --output-path "$SDK_DIR" \
             --overwrite
 
