@@ -449,80 +449,133 @@ async def query_drift(req: QueryRequest, _: None = Depends(require_api_key)):
     return await _run_with_limits("drift", coro)
 
 #============= Helper Transformer ============
-def _convert_openapi31_to_30(schema: dict) -> dict:
-    """
-    Minimal conversion for Foundry/OpenAPI 3.0 consumers:
-    - Convert JSON Schema nullables (3.1) to OpenAPI 3.0 'nullable'
-    - Add apiKey security scheme
-    - Remove header-parameter based api-key definitions
-    """
-    schema = json.loads(json.dumps(schema))  # deep copy
+import json
+import os
+from typing import Any, Dict
 
-    # Force OpenAPI version string
+
+def _convert_openapi31_to_30(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert a FastAPI-generated OpenAPI 3.1-ish schema into an OpenAPI 3.0.3 schema
+    that is friendlier for tools that require OpenAPI 3.0 (e.g., Foundry OpenAPI tools).
+
+    Key changes:
+    - Force openapi version string to 3.0.3
+    - Add `servers` with a base URL (required by many OpenAPI tool binders)
+    - Convert JSON Schema nullability patterns (3.1) to OpenAPI 3.0 `nullable: true`
+    - Define ONE apiKey security scheme (apiKeyHeader) and require it globally
+    - Remove per-operation x-api-key header parameters and per-operation security blocks
+    """
+
+    # --- deep copy to avoid mutating caller's schema ---
+    schema = json.loads(json.dumps(schema))
+
+    # --- Force version string (tooling expectation) ---
     schema["openapi"] = "3.0.3"
 
-    # Remove 3.1-only top-level keys if present
+    # Remove some 3.1-specific keys if present
     schema.pop("jsonSchemaDialect", None)
+    schema.pop("webhooks", None)  # not supported in 3.0
 
-    def fix_node(node):
+    # --- Add servers[] so tools know where to call ---
+    # Prefer explicit env var, fallback to your ACA URL.
+    public_base_url = os.getenv(
+        "PUBLIC_BASE_URL",
+        "https://graphrag-api.purpleocean-5db79053.westeurope.azurecontainerapps.io",
+    ).rstrip("/")
+    schema["servers"] = [{"url": public_base_url}]
+
+    # --- Convert nullable constructs ---
+    def _fix_nullable(node: Any) -> None:
         if isinstance(node, dict):
-            # Convert anyOf with null -> nullable
+            # Convert anyOf including {"type":"null"} -> nullable: true
             if "anyOf" in node and isinstance(node["anyOf"], list):
                 any_of = node["anyOf"]
-                has_null = any(isinstance(x, dict) and x.get("type") == "null" for x in any_of)
+                has_null = any(
+                    isinstance(x, dict) and x.get("type") == "null"
+                    for x in any_of
+                )
                 if has_null:
-                    any_of = [x for x in any_of if not (isinstance(x, dict) and x.get("type") == "null")]
-                    node["anyOf"] = any_of
-                    node["nullable"] = True
-                    # If anyOf collapses to a single schema, simplify it
-                    if len(any_of) == 1 and isinstance(any_of[0], dict):
-                        single = any_of[0]
+                    any_of_no_null = [
+                        x for x in any_of
+                        if not (isinstance(x, dict) and x.get("type") == "null")
+                    ]
+                    # If only one schema remains, merge it into current node
+                    if len(any_of_no_null) == 1 and isinstance(any_of_no_null[0], dict):
+                        single = any_of_no_null[0]
                         node.pop("anyOf", None)
                         for k, v in single.items():
+                            # do not overwrite nullable if already set
+                            if k == "nullable":
+                                continue
                             node[k] = v
-                        node["nullable"] = True
+                    else:
+                        node["anyOf"] = any_of_no_null
 
-            # Remove direct type:null
+                    node["nullable"] = True
+
+            # Convert direct type:null -> nullable
             if node.get("type") == "null":
                 node.pop("type", None)
                 node["nullable"] = True
 
             # Recurse
-            for k, v in list(node.items()):
-                fix_node(v)
+            for v in list(node.values()):
+                _fix_nullable(v)
 
         elif isinstance(node, list):
             for item in node:
-                fix_node(item)
+                _fix_nullable(item)
 
-    fix_node(schema)
+    _fix_nullable(schema)
 
-    # --- Add API key security scheme (Foundry expects this for API key connections) ---
-    schema.setdefault("components", {}).setdefault("securitySchemes", {})
-    schema["components"]["securitySchemes"]["apiKeyHeader"] = {
-        "type": "apiKey",
-        "name": "x-api-key",
-        "in": "header"
+    # --- Configure API key security in a Foundry-friendly way ---
+    # Foundry classic guidance: one apiKey security scheme + a security section.
+    # Keep ONLY ONE scheme named "apiKeyHeader".
+    schema.setdefault("components", {})
+    schema["components"]["securitySchemes"] = {
+        "apiKeyHeader": {
+            "type": "apiKey",
+            "name": "x-api-key",
+            "in": "header",
+        }
     }
 
     # Require it globally
     schema["security"] = [{"apiKeyHeader": []}]
 
-    # Make /health public (optional)
-    if "/health" in schema.get("paths", {}):
-        if "get" in schema["paths"]["/health"]:
-            schema["paths"]["/health"]["get"]["security"] = []
+    # /health should be public (optional) and is useful for liveness checks
+    paths = schema.get("paths", {})
+    if "/health" in paths and isinstance(paths["/health"], dict) and "get" in paths["/health"]:
+        paths["/health"]["get"]["security"] = []
 
-    # Remove x-api-key as a normal parameter (Foundry prefers securitySchemes)
-    for path, methods in schema.get("paths", {}).items():
+    # Remove x-api-key as an explicit header parameter and remove per-op security blocks.
+    for path, methods in paths.items():
+        if not isinstance(methods, dict):
+            continue
         for method, op in methods.items():
-            if isinstance(op, dict) and "parameters" in op:
-                op["parameters"] = [
-                    p for p in op["parameters"]
-                    if not (isinstance(p, dict) and p.get("in") == "header" and p.get("name") == "x-api-key")
+            if not isinstance(op, dict):
+                continue
+
+            # Remove header parameter (x-api-key) if present
+            params = op.get("parameters")
+            if isinstance(params, list):
+                new_params = [
+                    p for p in params
+                    if not (
+                        isinstance(p, dict)
+                        and p.get("in") == "header"
+                        and p.get("name") == "x-api-key"
+                    )
                 ]
-                if not op["parameters"]:
+                if new_params:
+                    op["parameters"] = new_params
+                else:
                     op.pop("parameters", None)
+
+            # Remove per-operation security (global security covers it)
+            if path != "/health":
+                op.pop("security", None)
 
     return schema
 
