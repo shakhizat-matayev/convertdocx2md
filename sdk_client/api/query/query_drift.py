@@ -35,6 +35,7 @@ def _parse_response(
 ) -> ApiError | QueryResponse | None:
     if response.status_code == 200:
         response_200 = QueryResponse.from_dict(response.json())
+
         return response_200
 
     if response.status_code == 401:
