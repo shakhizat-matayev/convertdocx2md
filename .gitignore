@@ -7,6 +7,8 @@ input/
 cache/
 output/
 
+publish_fresh_agent.txt
+
 # ---- Python virtual environments ----
 .venv/
 venv/

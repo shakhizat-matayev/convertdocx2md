@@ -599,20 +599,14 @@ async def query_local(req: QueryRequest, request: Request, _: None = Depends(req
 
 @app.post(
     "/query/drift",
+    response_model=QueryResponse,
     operation_id="query_drift",
     tags=["query"],
-    responses=DRIFT_STREAM_RESPONSES,
+    responses=QUERY_RESPONSES,  # same as global/local
 )
-async def query_drift(req: QueryRequest, request: Request, _: None = Depends(require_api_key)) -> StreamingResponse:
-    return StreamingResponse(
-        _drift_sse_stream(req, request),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+async def query_drift(req: QueryRequest, request: Request, _: None = Depends(require_api_key)) -> QueryResponse:
+    return await _run_query(QueryMethod.drift_search, req, request.state.request_id)
+
 
 
 @app.get("/openapi-3.0.json", include_in_schema=False)
