@@ -1,4 +1,5 @@
 import os
+import json
 import jsonref
 import requests
 from azure.identity import DefaultAzureCredential
@@ -35,7 +36,7 @@ def main():
 
         # 2) Load OpenAPI schema
         spec_text = requests.get(OPENAPI_SPEC_URL, timeout=30).text
-        openapi_spec = jsonref.loads(spec_text)
+        openapi_spec = json.loads(spec_text)
 
         # 3) Create OpenAPI tool using project connection authentication
         tool = OpenApiTool(

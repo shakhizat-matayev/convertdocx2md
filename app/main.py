@@ -32,6 +32,10 @@ from graphrag.config.load_config import load_config
 GRAPHRAG_ROOT = Path(os.getenv("GRAPHRAG_ROOT", ".")).resolve()
 OUTPUT_DIR = Path(os.getenv("GRAPHRAG_OUTPUT_DIR", "/data/output")).resolve()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip()
+OPENAPI_SERVER_FALLBACK_URL = os.getenv(
+    "OPENAPI_SERVER_FALLBACK_URL",
+    "https://graphrag-api.purpleocean-5db79053.westeurope.azurecontainerapps.io",
+).strip()
 
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("GRAPHRAG_REQUEST_TIMEOUT_SECONDS", "120"))
 MAX_CONCURRENT_REQUESTS = int(os.getenv("GRAPHRAG_MAX_CONCURRENT_REQUESTS", "4"))
@@ -231,8 +235,9 @@ def _custom_openapi() -> dict[str, Any]:
         routes=app.routes,
     )
     schema = _convert_openapi31_to_30(schema)
-    if PUBLIC_BASE_URL:
-        schema["servers"] = [{"url": PUBLIC_BASE_URL.rstrip("/")}]
+    server_url = (PUBLIC_BASE_URL or OPENAPI_SERVER_FALLBACK_URL).rstrip("/")
+    if server_url:
+        schema["servers"] = [{"url": server_url}]
 
     _OPENAPI_SCHEMA_CACHE = schema
     return _OPENAPI_SCHEMA_CACHE
