@@ -33,35 +33,48 @@ def _get_kwargs(
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
 ) -> ApiError | QueryResponse | None:
-    if response.status_code == 200:
-        response_200 = QueryResponse.from_dict(response.json())
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
 
-        return response_200
+    if response.status_code == 200:
+        if isinstance(payload, dict):
+            response_200 = QueryResponse.from_dict(payload)
+            return response_200
+        if client.raise_on_unexpected_status:
+            raise errors.UnexpectedStatus(response.status_code, response.content)
+        return None
 
     if response.status_code == 401:
-        response_401 = ApiError.from_dict(response.json())
-
-        return response_401
+        if isinstance(payload, dict):
+            response_401 = ApiError.from_dict(payload)
+            return response_401
+        return ApiError(error=response.text or "Unauthorized")
 
     if response.status_code == 422:
-        response_422 = ApiError.from_dict(response.json())
-
-        return response_422
+        if isinstance(payload, dict):
+            response_422 = ApiError.from_dict(payload)
+            return response_422
+        return ApiError(error=response.text or "Validation error")
 
     if response.status_code == 500:
-        response_500 = ApiError.from_dict(response.json())
-
-        return response_500
+        if isinstance(payload, dict):
+            response_500 = ApiError.from_dict(payload)
+            return response_500
+        return ApiError(error=response.text or "Internal server error")
 
     if response.status_code == 502:
-        response_502 = ApiError.from_dict(response.json())
-
-        return response_502
+        if isinstance(payload, dict):
+            response_502 = ApiError.from_dict(payload)
+            return response_502
+        return ApiError(error=response.text or "Bad gateway")
 
     if response.status_code == 504:
-        response_504 = ApiError.from_dict(response.json())
-
-        return response_504
+        if isinstance(payload, dict):
+            response_504 = ApiError.from_dict(payload)
+            return response_504
+        return ApiError(error=response.text or "Gateway timeout")
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)

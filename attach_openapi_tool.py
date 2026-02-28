@@ -28,6 +28,22 @@ OPENAPI_SPEC_URL = os.getenv(
 # Agent name to create/update (choose a stable name)
 AGENT_NAME = os.getenv("AGENT_NAME", "GraphRAG-Agent")
 
+
+def _load_openapi_spec(url: str) -> dict:
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    try:
+        openapi_spec = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"OpenAPI spec from {url} is not valid JSON") from exc
+
+    try:
+        resolved = jsonref.replace_refs(openapi_spec, proxies=False, lazy_load=False)
+        return json.loads(json.dumps(resolved))
+    except Exception:
+        return openapi_spec
+
 def main():
     with DefaultAzureCredential() as credential, AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential) as project_client:
         # 1) Resolve Project Connection ID (what the OpenAPI tool needs)
@@ -35,8 +51,7 @@ def main():
         print(f"Using project connection '{OPENAPI_CONNECTION_NAME}' id={conn_id}")
 
         # 2) Load OpenAPI schema
-        spec_text = requests.get(OPENAPI_SPEC_URL, timeout=30).text
-        openapi_spec = json.loads(spec_text)
+        openapi_spec = _load_openapi_spec(OPENAPI_SPEC_URL)
 
         # 3) Create OpenAPI tool using project connection authentication
         tool = OpenApiTool(

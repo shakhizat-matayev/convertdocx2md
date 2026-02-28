@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import io
 import json
 import logging
@@ -185,7 +186,7 @@ _OPENAPI_SCHEMA_CACHE: dict[str, Any] | None = None
 
 
 def _convert_openapi31_to_30(schema: dict[str, Any]) -> dict[str, Any]:
-    schema = json.loads(json.dumps(schema))
+    schema = copy.deepcopy(schema)
     schema["openapi"] = "3.0.3"
     schema.pop("jsonSchemaDialect", None)
     schema.pop("webhooks", None)
@@ -431,6 +432,16 @@ def health() -> HealthResponse:
         artifact_cache_age_seconds=cache_age,
     )
 
+@app.get("/debug/artifacts")
+def debug_artifacts():
+    return {
+        "entities": state.entities_df is not None,
+        "communities": state.communities_df is not None,
+        "community_reports": state.community_reports_df is not None,
+        "text_units": state.text_units_df is not None,
+        "relationships": state.relationships_df is not None,
+        "covariates": state.covariates_df is not None,
+    }
 
 async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) -> QueryResponse:
     if not state.config_loaded or state.graphrag_config is None:
@@ -486,8 +497,15 @@ async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) ->
             raise HTTPException(status_code=504, detail="GraphRAG query timed out")
         except HTTPException:
             raise
-        except Exception:
-            logger.exception("graphrag_query_failed method=%s request_id=%s", method.value, request_id)
+        except Exception as e:
+            logger.exception(
+                "graphrag_query_failed method=%s request_id=%s "
+                "has_text_units=%s has_relationships=%s has_covariates=%s",
+                method.value, request_id,
+                state.text_units_df is not None,
+                state.relationships_df is not None,
+                state.covariates_df is not None,
+            )
             raise HTTPException(status_code=502, detail="GraphRAG query failed")
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)

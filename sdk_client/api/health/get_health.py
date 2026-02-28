@@ -22,10 +22,18 @@ def _get_kwargs() -> dict[str, Any]:
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
 ) -> HealthResponse | None:
-    if response.status_code == 200:
-        response_200 = HealthResponse.from_dict(response.json())
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
 
-        return response_200
+    if response.status_code == 200:
+        if isinstance(payload, dict):
+            response_200 = HealthResponse.from_dict(payload)
+            return response_200
+        if client.raise_on_unexpected_status:
+            raise errors.UnexpectedStatus(response.status_code, response.content)
+        return None
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
