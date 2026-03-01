@@ -167,6 +167,13 @@ jobs:
         # secrets are app-scoped and referenced later as secretref
         # [4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)[6](https://learn.microsoft.com/en-us/cli/azure/search?view=azure-cli-latest)
 
+      - name: Ensure Container App secret for Azure OpenAI key
+        run: |
+          az containerapp secret set \
+            -g ${{ vars.RESOURCE_GROUP }} \
+            -n ${{ vars.CONTAINERAPP_NAME }} \
+            --secrets azure-openai-key="${{ secrets.AZURE_OPENAI_API_KEY }}"
+
       - name: Deploy new revision (real image + env vars)
         run: |
           az containerapp update \
@@ -186,7 +193,12 @@ jobs:
               GRAPHRAG_API_KEY=secretref:graphrag-api-key \
               AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn \
               AZURE_SEARCH_ADMIN_KEY=secretref:search-admin-key \
-              SERVICE_API_KEY=secretref:service-api-key
+              SERVICE_API_KEY=secretref:service-api-key \
+              AZURE_OPENAI_API_KEY=secretref:azure-openai-api-key \
+              AZURE_API_KEY=secretref:azure-openai-key \
+              AZURE_API_BASE='${{ vars.AZURE_OPENAI_ENDPOINT }}' \
+              AZURE_API_VERSION='${{ vars.AZURE_OPENAI_API_VERSION }}'
+
 
       
       - name: Enable/Update ingress (external) to target port 8000
