@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OPENAPI_URL="${OPENAPI_URL:-http://localhost:8000/openapi-3.0.json}"
 PACKAGE_NAME="${PACKAGE_NAME:-graphrag_sdk_client}"
 PROJECT_NAME="${PROJECT_NAME:-graphrag-sdk-client}"
 OUTPUT_DIR="${OUTPUT_DIR:-./sdk_client}"
@@ -13,10 +12,20 @@ if ! command -v openapi-python-client >/dev/null 2>&1; then
   exit 1
 fi
 
-TMP_SPEC="$(mktemp)"
+TMP_SPEC="$(mktemp --suffix=.json)"
 trap 'rm -f "$TMP_SPEC"' EXIT
 
-curl -fsSL "$OPENAPI_URL" -o "$TMP_SPEC"
+python - <<'PY' "$TMP_SPEC"
+import json
+import sys
+from pathlib import Path
+
+from app.main import app
+
+out = Path(sys.argv[1])
+out.write_text(json.dumps(app.openapi(), indent=2), encoding="utf-8")
+print(f"Wrote OpenAPI schema to {out}")
+PY
 
 openapi-python-client generate \
   --path "$TMP_SPEC" \
