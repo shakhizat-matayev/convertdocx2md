@@ -432,24 +432,36 @@ def health() -> HealthResponse:
         artifact_cache_age_seconds=cache_age,
     )
 
-@app.get("/debug/artifacts")
-def debug_artifacts():
+@app.get("/debug/artifacts", include_in_schema=False)
+async def debug_artifacts(request: Request, _: None = Depends(require_api_key)):
+    # Ensure the same loading path as queries
+    await _ensure_artifacts_loaded()
+
+    def df_info(df: pd.DataFrame | None):
+        if df is None:
+            return {"loaded": False}
+        return {
+            "loaded": True,
+            "rows": int(df.shape[0]),
+            "cols": int(df.shape[1]),
+            "columns": list(df.columns),
+        }
+
     return {
-        "entities": state.entities_df is not None,
-        "communities": state.communities_df is not None,
-        "community_reports": state.community_reports_df is not None,
-        "text_units": state.text_units_df is not None,
-        "relationships": state.relationships_df is not None,
-        "covariates": state.covariates_df is not None,
+        "entities_df": df_info(getattr(state, "entities_df", None)),
+        "communities_df": df_info(getattr(state, "communities_df", None)),
+        "community_reports_df": df_info(getattr(state, "community_reports_df", None)),
+        "text_units_df": df_info(getattr(state, "text_units_df", None)),
+        "relationships_df": df_info(getattr(state, "relationships_df", None)),
+        "covariates_df": df_info(getattr(state, "covariates_df", None)),
+        "process": {
+            "pid": __import__("os").getpid(),
+        },
     }
 
 def _require_loaded(name: str, obj):
     if obj is None:
         raise HTTPException(status_code=500, detail=f"Missing required artifact: {name}")
-
-import asyncio
-import time
-from fastapi import HTTPException
 
 async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) -> QueryResponse:
     """
