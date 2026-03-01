@@ -443,12 +443,50 @@ def debug_artifacts():
         "covariates": state.covariates_df is not None,
     }
 
+def _require_loaded(name: str, obj):
+    if obj is None:
+        raise HTTPException(status_code=500, detail=f"Missing required artifact: {name}")
+
+import asyncio
+import time
+from fastapi import HTTPException
+
 async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) -> QueryResponse:
+    """
+    Runs a GraphRAG query using the configured pipeline for the given method.
+
+    - Validates config/artifacts are loaded
+    - Enforces method-specific artifact presence
+    - Executes query under concurrency semaphore + timeout
+    - Converts unexpected failures to HTTP 502 with server-side logging
+    """
+    # ---- Config guard ----
     if not state.config_loaded or state.graphrag_config is None:
         raise HTTPException(status_code=500, detail="GraphRAG config not loaded")
 
+    # Ensure artifacts are loaded (may be cached)
     await _ensure_artifacts_loaded()
 
+    # ---- Always-required artifacts ----
+    _require_loaded("entities_df", state.entities_df)
+    _require_loaded("communities_df", state.communities_df)
+    _require_loaded("community_reports_df", state.community_reports_df)
+
+    # ---- Method-specific artifact requirements ----
+    if method == QueryMethod.local_search:
+        _require_loaded("text_units_df", state.text_units_df)
+        _require_loaded("relationships_df", state.relationships_df)
+        _require_loaded("covariates_df", state.covariates_df)
+
+    elif method == QueryMethod.drift_search:
+        _require_loaded("text_units_df", state.text_units_df)
+        _require_loaded("relationships_df", state.relationships_df)
+
+    elif method != QueryMethod.global_search:
+        # Fail fast if an unexpected method is passed
+        raise HTTPException(status_code=400, detail=f"Unsupported query method: {method}")
+
+    # ---- Build the coroutine for the selected method ----
     if method == QueryMethod.global_search:
         query_coro = graphrag_api.global_search(
             config=state.graphrag_config,
@@ -461,6 +499,7 @@ async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) ->
             query=req.question,
             verbose=req.verbose,
         )
+
     elif method == QueryMethod.local_search:
         query_coro = graphrag_api.local_search(
             config=state.graphrag_config,
@@ -475,7 +514,8 @@ async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) ->
             query=req.question,
             verbose=req.verbose,
         )
-    else:
+
+    else:  # method == QueryMethod.drift_search
         query_coro = graphrag_api.drift_search(
             config=state.graphrag_config,
             entities=state.entities_df,
@@ -489,19 +529,30 @@ async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) ->
             verbose=req.verbose,
         )
 
+    # ---- Execute under semaphore + timeout ----
     started = time.perf_counter()
     async with state.sem:
         try:
-            answer, _context = await asyncio.wait_for(query_coro, timeout=REQUEST_TIMEOUT_SECONDS)
+            answer, _context = await asyncio.wait_for(
+                query_coro,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="GraphRAG query timed out")
+
         except HTTPException:
+            # Preserve explicit HTTPExceptions (like our 400/500 from validation)
             raise
-        except Exception as e:
+
+        except Exception:
+            # Log rich context for debugging (which artifacts were present)
             logger.exception(
-                "graphrag_query_failed method=%s request_id=%s "
+                "graphrag_query_failed method=%s request_id=%s qlen=%s "
                 "has_text_units=%s has_relationships=%s has_covariates=%s",
-                method.value, request_id,
+                getattr(method, "value", str(method)),
+                request_id,
+                len(req.question or ""),
                 state.text_units_df is not None,
                 state.relationships_df is not None,
                 state.covariates_df is not None,
@@ -509,6 +560,7 @@ async def _run_query(method: QueryMethod, req: QueryRequest, request_id: str) ->
             raise HTTPException(status_code=502, detail="GraphRAG query failed")
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+
     return QueryResponse(
         request_id=request_id,
         method=method,
