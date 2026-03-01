@@ -338,7 +338,15 @@ async def _ensure_artifacts_loaded(force: bool = False) -> None:
         try:
             state.covariates_df = await asyncio.to_thread(_read_parquet_from_blob, "covariates.parquet")
         except Exception:
-            state.covariates_df = None
+            state.covariates_df = pd.DataFrame(
+                columns=[
+                    "id",
+                    "human_readable_id",
+                    "entity_id",
+                    "name",
+                    "value",
+                ]
+            )
 
         state.artifacts_loaded_at = time.time()
         elapsed_ms = int((time.perf_counter() - started) * 1000)
