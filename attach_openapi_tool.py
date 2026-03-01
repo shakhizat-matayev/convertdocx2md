@@ -2,6 +2,7 @@ import os
 import json
 import jsonref
 import requests
+from typing import Any
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -44,14 +45,64 @@ def _load_openapi_spec(url: str) -> dict:
     except Exception:
         return openapi_spec
 
+
+def _extract_api_key_header(spec: dict[str, Any]) -> tuple[str, str]:
+    security_schemes = spec.get("components", {}).get("securitySchemes", {})
+    if not isinstance(security_schemes, dict) or not security_schemes:
+        raise RuntimeError("OpenAPI spec has no components.securitySchemes; cannot configure auth")
+
+    for scheme_name, scheme in security_schemes.items():
+        if not isinstance(scheme, dict):
+            continue
+        if scheme.get("type") == "apiKey" and scheme.get("in") == "header":
+            header_name = str(scheme.get("name") or "").strip()
+            if not header_name:
+                raise RuntimeError(f"Security scheme '{scheme_name}' is apiKey/header but has no header name")
+            return scheme_name, header_name
+
+    raise RuntimeError(
+        "No header-based apiKey security scheme found in OpenAPI spec. "
+        "The GraphRAG API expects API key auth."
+    )
+
+
+def _build_connection_security_scheme(conn_id: str):
+    attempts = [
+        {"project_connection_id": conn_id, "connection_id": conn_id},
+        {"project_connection_id": conn_id},
+        {"connection_id": conn_id},
+    ]
+    last_error: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return OpenApiProjectConnectionSecurityScheme(**kwargs)
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(
+        "Could not build OpenAPI connection security scheme from SDK model. "
+        "Check azure-ai-projects package compatibility."
+    ) from last_error
+
 def main():
     with DefaultAzureCredential() as credential, AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential) as project_client:
         # 1) Resolve Project Connection ID (what the OpenAPI tool needs)
-        conn_id = project_client.connections.get(OPENAPI_CONNECTION_NAME).id
+        connection = project_client.connections.get(OPENAPI_CONNECTION_NAME)
+        conn_id = getattr(connection, "id", None)
+        if not conn_id:
+            raise RuntimeError(f"Could not resolve connection id for '{OPENAPI_CONNECTION_NAME}'")
         print(f"Using project connection '{OPENAPI_CONNECTION_NAME}' id={conn_id}")
 
         # 2) Load OpenAPI schema
         openapi_spec = _load_openapi_spec(OPENAPI_SPEC_URL)
+        scheme_name, header_name = _extract_api_key_header(openapi_spec)
+        print(f"OpenAPI auth scheme detected: {scheme_name} (header '{header_name}')")
+
+        if header_name.lower() != "x-api-key":
+            print(
+                "⚠️ Warning: OpenAPI header is not 'x-api-key'. "
+                "Verify the Foundry connection injects the exact header expected by the API."
+            )
 
         # 3) Create OpenAPI tool using project connection authentication
         tool = OpenApiTool(
@@ -60,9 +111,7 @@ def main():
                 description="GraphRAG API: global/local/drift queries with citations",
                 spec=openapi_spec,
                 auth=OpenApiProjectConnectionAuthDetails(
-                    security_scheme=OpenApiProjectConnectionSecurityScheme(
-                        project_connection_id=conn_id
-                    )
+                    security_scheme=_build_connection_security_scheme(conn_id)
                 ),
             )
         )
@@ -82,6 +131,10 @@ def main():
         )
 
         print(f"✅ Agent created/updated: id={agent.id}, name={agent.name}, version={agent.version}")
+        print(
+            "Auth check reminder: if Playground still fails, verify project connection secret matches SERVICE_API_KEY "
+            "and that it is sent as header 'x-api-key'."
+        )
         print("Now open the Foundry portal -> Agents -> select this agent and test in Playground.")
 
 if __name__ == "__main__":
