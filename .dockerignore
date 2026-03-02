@@ -24,7 +24,7 @@ raw_reports/
 tests/
 md/
 md_media/
-
+data_csv/
 
 # OS junk
 .DS_Store

@@ -6,6 +6,7 @@ raw_reports/
 input/
 cache/
 output/
+data_csv/
 
 publish_fresh_agent.txt
 
