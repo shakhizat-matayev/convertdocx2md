@@ -156,23 +156,89 @@ jobs:
 
       - name: Set/Update ACA secrets (app-level)
         run: |
-          az containerapp secret set \
-            -g ${{ vars.RESOURCE_GROUP }} \
-            -n ${{ vars.CONTAINERAPP_NAME }} \
-            --secrets \
-              graphrag-api-key='${{ secrets.GRAPHRAG_API_KEY }}' \
-              storage-conn='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
-              search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}' \
-              service-api-key='${{ secrets.SERVICE_API_KEY }}'
+          set -euo pipefail
+
+          retry_aca_secret_set() {
+            local max_attempts=6
+            local attempt=1
+            local delay=10
+            local output
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Setting ACA secrets (attempt ${attempt}/${max_attempts})..."
+              if output=$(az containerapp secret set \
+                -g ${{ vars.RESOURCE_GROUP }} \
+                -n ${{ vars.CONTAINERAPP_NAME }} \
+                --secrets \
+                  graphrag-api-key='${{ secrets.GRAPHRAG_API_KEY }}' \
+                  storage-conn='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
+                  search-admin-key='${{ secrets.AZURE_SEARCH_ADMIN_KEY }}' \
+                  service-api-key='${{ secrets.SERVICE_API_KEY }}' 2>&1); then
+                echo "$output"
+                echo "ACA secrets updated successfully."
+                return 0
+              fi
+
+              echo "$output"
+              if echo "$output" | grep -qiE "Service Unavailable|JSONDecodeError|Expecting property name enclosed in double quotes|Our services aren't available right now"; then
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                  echo "Transient Azure/CLI error detected. Retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  if [ "$delay" -gt 60 ]; then delay=60; fi
+                  attempt=$((attempt + 1))
+                  continue
+                fi
+              fi
+
+              echo "Failed to set ACA secrets after ${attempt} attempt(s)."
+              return 1
+            done
+          }
+
+          retry_aca_secret_set
         # secrets are app-scoped and referenced later as secretref
         # [4](https://gist.github.com/vprasadreddy/c0376f70e23ac151c537188fd8402541)[6](https://learn.microsoft.com/en-us/cli/azure/search?view=azure-cli-latest)
 
       - name: Ensure Container App secret for Azure OpenAI key
         run: |
-          az containerapp secret set \
-            -g ${{ vars.RESOURCE_GROUP }} \
-            -n ${{ vars.CONTAINERAPP_NAME }} \
-            --secrets azure-openai-key="${{ secrets.AZURE_OPENAI_API_KEY }}"
+          set -euo pipefail
+
+          retry_openai_secret_set() {
+            local max_attempts=6
+            local attempt=1
+            local delay=10
+            local output
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Setting Azure OpenAI ACA secret (attempt ${attempt}/${max_attempts})..."
+              if output=$(az containerapp secret set \
+                -g ${{ vars.RESOURCE_GROUP }} \
+                -n ${{ vars.CONTAINERAPP_NAME }} \
+                --secrets azure-openai-key="${{ secrets.AZURE_OPENAI_API_KEY }}" 2>&1); then
+                echo "$output"
+                echo "Azure OpenAI ACA secret updated successfully."
+                return 0
+              fi
+
+              echo "$output"
+              if echo "$output" | grep -qiE "Service Unavailable|JSONDecodeError|Expecting property name enclosed in double quotes|Our services aren't available right now"; then
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                  echo "Transient Azure/CLI error detected. Retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  if [ "$delay" -gt 60 ]; then delay=60; fi
+                  attempt=$((attempt + 1))
+                  continue
+                fi
+              fi
+
+              echo "Failed to set Azure OpenAI ACA secret after ${attempt} attempt(s)."
+              return 1
+            done
+          }
+
+          retry_openai_secret_set
 
       - name: Deploy new revision (real image + env vars)
         run: |

@@ -197,7 +197,24 @@ jobs:
           AZURE_AI_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_PROJECT_ENDPOINT }}
           AZURE_AI_MODEL_DEPLOYMENT_NAME: ${{ vars.AZURE_AI_MODEL_DEPLOYMENT_NAME }}
           OPENAPI_PROJECT_CONNECTION_NAME: ${{ vars.OPENAPI_PROJECT_CONNECTION_NAME }}
+          OPENAPI_PROJECT_CONNECTION_ID: ${{ vars.OPENAPI_PROJECT_CONNECTION_ID }}
           OPENAPI_SPEC_URL: ${{ vars.OPENAPI_SPEC_URL }}
           AGENT_NAME: ${{ vars.AGENT_NAME }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          echo "Attach preflight context:"
+          echo "  project_endpoint=${AZURE_AI_PROJECT_ENDPOINT}"
+          echo "  tenant_id=${AZURE_TENANT_ID}"
+          echo "  subscription_id=${AZURE_SUBSCRIPTION_ID}"
+          echo "  model_deployment=${AZURE_AI_MODEL_DEPLOYMENT_NAME}"
+          echo "  openapi_connection_name=${OPENAPI_PROJECT_CONNECTION_NAME}"
+          if [ -n "${OPENAPI_PROJECT_CONNECTION_ID:-}" ]; then
+            echo "  openapi_connection_id=${OPENAPI_PROJECT_CONNECTION_ID}"
+          else
+            echo "  openapi_connection_id=<not set>"
+          fi
+          echo "  openapi_spec_url=${OPENAPI_SPEC_URL}"
+          echo "  agent_name=${AGENT_NAME}"
+
           python attach_openapi_tool.py
