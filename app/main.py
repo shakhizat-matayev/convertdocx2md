@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import io
-import json
 import logging
 import os
 import re
@@ -10,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from hmac import compare_digest
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -19,7 +18,7 @@ from azure.storage.blob import BlobServiceClient
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -597,79 +596,6 @@ QUERY_RESPONSES = {
     504: {"model": ApiError, "description": "Backend timeout"},
 }
 
-DRIFT_STREAM_RESPONSES = {
-    200: {
-        "description": "Server-sent event stream with drift answer chunks",
-        "content": {
-            "text/event-stream": {
-                "schema": {
-                    "type": "string"
-                }
-            }
-        },
-    },
-    401: {"model": ApiError, "description": "Unauthorized"},
-    422: {"model": ApiError, "description": "Validation error"},
-    500: {"model": ApiError, "description": "Internal server error"},
-    502: {"model": ApiError, "description": "GraphRAG backend error"},
-    504: {"model": ApiError, "description": "Backend timeout"},
-}
-
-
-def _chunk_text(value: str, size: int = 700) -> list[str]:
-    if not value:
-        return [""]
-    return [value[index:index + size] for index in range(0, len(value), size)]
-
-
-async def _drift_sse_stream(req: QueryRequest, request: Request) -> AsyncIterator[str]:
-    request_id = request.state.request_id
-    try:
-        result = await _run_query(QueryMethod.drift_search, req, request_id)
-
-        start_payload = {
-            "type": "start",
-            "request_id": result.request_id,
-            "method": result.method.value,
-            "latency_ms": result.latency_ms,
-        }
-        yield f"data: {json.dumps(start_payload, ensure_ascii=False)}\\n\\n"
-
-        for chunk in _chunk_text(result.answer):
-            if await request.is_disconnected():
-                return
-            chunk_payload = {
-                "type": "chunk",
-                "request_id": result.request_id,
-                "delta": chunk,
-            }
-            yield f"data: {json.dumps(chunk_payload, ensure_ascii=False)}\\n\\n"
-            await asyncio.sleep(0)
-
-        end_payload = {
-            "type": "end",
-            "request_id": result.request_id,
-        }
-        yield f"data: {json.dumps(end_payload, ensure_ascii=False)}\\n\\n"
-    except HTTPException as exc:
-        error_payload = {
-            "type": "error",
-            "request_id": request_id,
-            "error": exc.detail if isinstance(exc.detail, str) else "Request failed",
-            "status_code": exc.status_code,
-        }
-        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
-    except Exception:
-        logger.exception("drift_stream_failed request_id=%s", request_id)
-        error_payload = {
-            "type": "error",
-            "request_id": request_id,
-            "error": "Internal server error",
-            "status_code": 500,
-        }
-        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
-
-
 @app.post(
     "/query/global",
     response_model=QueryResponse,
@@ -707,3 +633,31 @@ async def query_drift(req: QueryRequest, request: Request, _: None = Depends(req
 @app.get("/openapi-3.0.json", include_in_schema=False)
 def openapi_3_0() -> JSONResponse:
     return JSONResponse(content=app.openapi())
+
+# temporary debug endpoint to inspect covariates loading without running a full query
+@app.get("/debug/covariates_stats", include_in_schema=False)
+async def debug_covariates_stats(_: None = Depends(require_api_key)):
+    await _ensure_artifacts_loaded()
+
+    tu = state.text_units_df
+    cv = state.covariates_df
+
+    if tu is None:
+        return {"ok": False, "error": "text_units_df missing"}
+
+    has_col = "covariate_ids" in tu.columns
+    non_null = int(tu["covariate_ids"].notna().sum()) if has_col else 0
+
+    # show a small sample without blowing up output
+    sample = []
+    if has_col:
+        sample = tu["covariate_ids"].dropna().head(5).tolist()
+
+    return {
+        "ok": True,
+        "text_units_rows": int(tu.shape[0]),
+        "covariates_rows": 0 if cv is None else int(cv.shape[0]),
+        "has_covariate_ids_column": has_col,
+        "covariate_ids_non_null_count": non_null,
+        "sample_covariate_ids": sample
+    }
