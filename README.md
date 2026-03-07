@@ -1,6 +1,6 @@
 # convertdocx2md
 
-Convert SSAF well reports from Word (`.docx`) into GraphRAG-ready Markdown, index them, and run GraphRAG queries.
+Convert SSAF Well Health Reports from Word (`.docx`), Master Table and 4D Seismic CSVs into GraphRAG-ready Markdown, index them, and run GraphRAG queries.
 
 ## What this repository includes
 
