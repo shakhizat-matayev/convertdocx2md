@@ -1,4 +1,4 @@
-# convertdocx2md
+# GraphRAG implementation
 
 Convert SSAF well reports and related CSV context into GraphRAG-ready markdown, build an index, and query via CLI or a FastAPI service.
 
